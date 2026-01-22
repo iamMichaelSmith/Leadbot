@@ -1,0 +1,11 @@
+https://syncreport.com	bad_status_403
+https://syncsummit.com/speakers	bad_status_404
+https://www.aicp.com/members	bad_status_404
+https://www.musicgateway.com/music-supervisors	bad_status_404
+https://www.mandy.com/us/crew/profile/music-supervisor	bad_status_403
+https://www.productionhub.com/directory/profiles/music-supervisors	bad_status_403
+https://www.sonicbids.com/find-gigs/music-supervisors/	bad_status_429
+https://www.routnote.com/blog/music-supervisor-contacts/	error_ConnectionError
+https://www.videomusicpros.com/music-supervisors.html	dns_fail
+https://www.musicclout.com/contents/charts.aspx	timeout
+https://www.aotn.co/featured-artists	timeout
