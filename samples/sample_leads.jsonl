@@ -1,0 +1,2 @@
+{"lead_id":"demo1","email":"contact@example.com","contact_type":"email","contact_url":"https://example.com/contact","role":"publisher","role_confidence":70,"library_confidence":80,"source_url":"https://example.com","status":"new","draft_message":"Sample only"}
+{"lead_id":"demo2","email":null,"contact_type":"form","contact_url":"https://example.org/contact","role":"unknown","role_confidence":0,"library_confidence":65,"source_url":"https://example.org","status":"new","draft_message":"Sample only"}
