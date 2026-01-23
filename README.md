@@ -1,7 +1,7 @@
 # Leadbot
 
 ## Summary
-Leadbot is a Raspberry Pi-based Python crawler that discovers music library companies, extracts contact signals (emails or contact forms), scores library relevance, and stores structured leads in DynamoDB for review. It uses Brave/Serper discovery, enforces crawl limits, and keeps a human-in-the-loop workflow with no automated outreach.
+Leadbot is a hybrid on-device + AWS lead discovery system for music libraries. It discovers licensing catalogs, extracts contact signals (emails or forms), scores library relevance, and stores structured leads in DynamoDB for review. It uses Brave/Serper discovery, enforces crawl limits, and keeps a human-in-the-loop workflow with no automated outreach.
 
 ## Quickstart (Local)
 ```bash
@@ -42,7 +42,7 @@ flowchart LR
 
 ---
 
-## Raspberry Pi Based Lead Discovery and Outreach System
+## Hybrid Lead Discovery and Outreach System
 
 ### Project Type
 
@@ -71,7 +71,7 @@ Blak Marigold Studio needed a lightweight, always on system that could:
 - Allow engineers to review leads between sessions
 - Scale later without redesigning the system
 
-A Raspberry Pi was chosen because it is:
+The local node was chosen because it is:
 
 - Always on
 - Low cost
@@ -82,7 +82,7 @@ A Raspberry Pi was chosen because it is:
 
 ## High-Level Architecture
 
-### Local (Raspberry Pi)
+### Local (Hybrid Edge Node)
 
 - Python-based crawler and lead processor
 - Draft message generator
@@ -105,7 +105,7 @@ A Raspberry Pi was chosen because it is:
 
 ## Project Folder Structure
 
-All project files live in the Raspberry Pi user's home directory.
+All project files live in the local edge node user's home directory.
 
 ```
 /home/knolly
@@ -133,7 +133,7 @@ This structure keeps:
 
 ## Step 1: Create Project Directories
 
-From a fresh Raspberry Pi install, connect via SSH and confirm your user.
+From a fresh edge-node install, connect via SSH and confirm your user.
 
 ```bash
 whoami
@@ -287,11 +287,11 @@ This section continues the Studio MVP build **after Python dependencies (Beautif
 
 ---
 
-## Step 4: Install AWS CLI on Raspberry Pi
+## Step 4: Install AWS CLI on the local node
 
 The AWS CLI is required to:
 
-- Authenticate the Raspberry Pi with AWS
+- Authenticate the local node with AWS
 - create and verify DynamoDB tables
 - Inspect crawl results in real time
 - support repeatable infrastructure setup
@@ -322,7 +322,7 @@ aws-cli/2.x.x
 
 ## Step 5: Create an IAM user with least privilege
 
-A **dedicated IAM user** is created specifically for the Raspberry Pi crawler.
+A **dedicated IAM user** is created specifically for the crawler.
 
 This user does **not** have broad AWS permissions.
 
@@ -335,7 +335,7 @@ This user does **not** have broad AWS permissions.
 
 ### IAM user
 
-- User name example: `RaspberryLeadbot`
+- User name example: `LeadbotCrawler`
 - Authentication: Access key + secret key
 - Programmatic access only
 
@@ -375,7 +375,7 @@ This ensures:
 
 ---
 
-## Step 6: Configure AWS CLI on Raspberry Pi
+## Step 6: Configure AWS CLI on the local node
 
 Configure AWS CLI using the IAM user credentials.
 
@@ -637,7 +637,7 @@ Used to observe:
 At this point, Studio MVP has demonstrated:
 
 - Least privilege IAM architecture
-- Raspberry Pi running a long-lived crawler
+- Local node running a long-lived crawler
 - DynamoDB write access verified
 - Controlled crawl scope via seed allow list
 - Real-time logging and inspection
@@ -734,7 +734,7 @@ Then replace `seeds.txt` with the working list so the crawler only hits valid so
 
 ### Commands
 
-SSH into the Pi and activate the environment:
+SSH into the local node and activate the environment:
 
 ```bash
 ssh knolly@192.168.1.85
@@ -743,7 +743,7 @@ source .venv/bin/activate
 
 ```
 
-Optional quick sanity check that the Pi has internet and DNS is working:
+Optional quick sanity check that the node has internet and DNS is working:
 
 ```bash
 ping -c 3 8.8.8.8
