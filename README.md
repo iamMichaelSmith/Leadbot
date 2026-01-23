@@ -11,6 +11,31 @@ copy .env.example .env
 .\.venv\Scripts\python run.py
 ```
 
+## Dashboard (Local)
+Set the dashboard creds in `.env`:
+```
+DASHBOARD_USERS=admin:changeme
+DASHBOARD_SESSION_SECRET=change_this_secret
+```
+
+Run the dashboard:
+```
+.\.venv\Scripts\pip install -r requirements.txt
+.\run-dashboard.ps1
+```
+
+Then open `http://localhost:8001` (or the port you set in `DASHBOARD_PORT`).
+
+### OpenAI Discovery (optional)
+Use OpenAI web search as a discovery provider:
+```
+OPENAI_API_KEY=your_key
+OPENAI_SEARCH_MODEL=gpt-4o-mini
+DISCOVERY_ENABLED=1
+DISCOVERY_PROVIDERS=openai
+```
+You can also combine providers: `DISCOVERY_PROVIDERS=brave,serper,openai`.
+
 ## Results (Typical)
 - 30-60 library-focused leads per run (depends on thresholds and query volume)
 - Library confidence gating to reduce non-library noise

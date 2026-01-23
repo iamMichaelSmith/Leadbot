@@ -1,0 +1,124 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Lead Dashboard</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <script defer src="/static/app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <h1>Lead Dashboard</h1>
+        <div class="meta">Rotate after {{ rotate_days }} days · Page limit {{ page_limit }}</div>
+      </div>
+      <div class="user">
+        <span>Signed in as {{ user }}</span>
+        <a class="logout" href="/logout">Logout</a>
+      </div>
+    </header>
+
+    <section class="filters">
+      <form method="get" action="/">
+        <label>
+          Assignee
+          <select name="assignee">
+            <option value="" {% if assignee_filter == "" %}selected{% endif %}>All</option>
+            <option value="__unassigned__" {% if assignee_filter == "__unassigned__" %}selected{% endif %}>Unassigned</option>
+            {% for a in assignees %}
+            <option value="{{ a }}" {% if assignee_filter == a %}selected{% endif %}>{{ a }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <button type="submit">Filter</button>
+      </form>
+      <div class="count">Leads: {{ leads | length }}</div>
+    </section>
+
+    <main class="cards">
+      {% for lead in leads %}
+      <article class="card">
+        <div class="card-header">
+          <div>
+            <div class="company">{{ lead.company_name or "unknown" }}</div>
+            <div class="site">
+              <a href="{{ lead.source_url }}" target="_blank" rel="noreferrer">Open site</a>
+              {% if lead.contact_url %}
+              · <a href="{{ lead.contact_url }}" target="_blank" rel="noreferrer">Contact page</a>
+              {% endif %}
+            </div>
+          </div>
+          <div class="badges">
+            <span class="badge">Role: {{ lead.role or "unknown" }}</span>
+            <span class="badge">Role conf: {{ lead.role_confidence or 0 }}</span>
+            <span class="badge">Library conf: {{ lead.library_confidence or 0 }}</span>
+          </div>
+        </div>
+
+        <div class="details">
+          <div>
+            <strong>Email:</strong>
+            {% if lead.email %}
+            <a href="mailto:{{ lead.email }}">{{ lead.email }}</a>
+            {% else %}
+            —
+            {% endif %}
+          </div>
+          <div>
+            <strong>Contact:</strong>
+            {% if lead.contact_url %}
+            <a href="{{ lead.contact_url }}" target="_blank" rel="noreferrer">{{ lead.contact_url }}</a>
+            {% else %}
+            —
+            {% endif %}
+          </div>
+          <div>
+            <strong>Source:</strong>
+            {% if lead.source_url %}
+            <a href="{{ lead.source_url }}" target="_blank" rel="noreferrer">{{ lead.source_url }}</a>
+            {% else %}
+            —
+            {% endif %}
+          </div>
+          <div><strong>Last seen:</strong> {{ lead.last_seen or "—" }}</div>
+        </div>
+
+        <div class="row">
+          <form class="field" method="post" action="/lead/{{ lead.lead_id }}/assign">
+            <label>Assignee</label>
+            <div class="inline">
+              <select name="assignee">
+                <option value="" {% if not lead.assignee %}selected{% endif %}>Unassigned</option>
+                {% for a in assignees %}
+                <option value="{{ a }}" {% if lead.assignee == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+              </select>
+              <button type="submit">Save</button>
+            </div>
+          </form>
+
+          <form class="field" method="post" action="/lead/{{ lead.lead_id }}/status">
+            <label>Status</label>
+            <div class="inline">
+              <button class="thumb up" type="submit" name="status" value="contacted">👍 Reached out</button>
+              <button class="thumb down" type="submit" name="status" value="bad">👎 Bad lead</button>
+            </div>
+          </form>
+        </div>
+
+        <form class="field" method="post" action="/lead/{{ lead.lead_id }}/note">
+          <label>Notes</label>
+          <textarea name="notes" rows="3">{{ lead.notes or "" }}</textarea>
+          <button type="submit">Save notes</button>
+        </form>
+
+        <div class="field">
+          <label>Draft message</label>
+          <textarea id="draft-{{ lead.lead_id }}" rows="6" readonly>{{ lead.draft_message or "" }}</textarea>
+          <button class="copy" type="button" data-target="draft-{{ lead.lead_id }}">Copy draft</button>
+        </div>
+      </article>
+      {% endfor %}
+    </main>
+  </body>
+</html>

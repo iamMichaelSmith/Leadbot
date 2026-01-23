@@ -45,9 +45,13 @@ DISCOVERY_BATCH_SIZE = int(os.getenv("DISCOVERY_BATCH_SIZE", "50"))
 DISCOVERY_STATE_FILE = os.getenv("DISCOVERY_STATE_FILE", "discovery_state.json")
 DISCOVERY_DAILY_QUERY_LIMIT_BRAVE = int(os.getenv("DISCOVERY_DAILY_QUERY_LIMIT_BRAVE", "2000"))
 DISCOVERY_DAILY_QUERY_LIMIT_SERPER = int(os.getenv("DISCOVERY_DAILY_QUERY_LIMIT_SERPER", "2500"))
+DISCOVERY_DAILY_QUERY_LIMIT_OPENAI = int(os.getenv("DISCOVERY_DAILY_QUERY_LIMIT_OPENAI", "500"))
 
 BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
 SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "gpt-4o-mini").strip()
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
 DISCO_PORTFOLIO_LINK = os.getenv("DISCO_PORTFOLIO_LINK", "").strip()
 
 dynamodb = boto3.resource(
@@ -671,6 +675,8 @@ def provider_quota_available(provider: str, used: dict) -> bool:
         return used.get("brave", 0) < DISCOVERY_DAILY_QUERY_LIMIT_BRAVE
     if provider == "serper":
         return used.get("serper", 0) < DISCOVERY_DAILY_QUERY_LIMIT_SERPER
+    if provider == "openai":
+        return used.get("openai", 0) < DISCOVERY_DAILY_QUERY_LIMIT_OPENAI
     return False
 
 def bump_provider_usage(provider: str, used: dict):
@@ -747,6 +753,85 @@ def library_confidence(title: str, headings: str, body: str, url: str) -> int:
     if score > 100:
         score = 100
     return score
+
+def derive_company_name(title: str, url: str) -> str | None:
+    try:
+        host = normalize_netloc(urlparse(url).netloc)
+        return host or None
+    except Exception:
+        return None
+
+def extract_openai_output_text(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    if isinstance(data.get("output_text"), str):
+        return data.get("output_text", "")
+    parts = []
+    for item in data.get("output", []):
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content", []):
+            if content.get("type") == "output_text" and content.get("text"):
+                parts.append(content["text"])
+    return "\n".join(parts)
+
+def extract_openai_urls(data: dict) -> list[str]:
+    urls = []
+    if not isinstance(data, dict):
+        return urls
+    for item in data.get("output", []):
+        if item.get("type") != "message":
+            continue
+        for content in item.get("content", []):
+            for ann in content.get("annotations", []):
+                url = ann.get("url")
+                if url:
+                    urls.append(url)
+    text = extract_openai_output_text(data)
+    if text:
+        urls.extend(re.findall(r"https?://[^\s\)>\]\"']+", text))
+    cleaned = []
+    seen = set()
+    for u in urls:
+        nu = normalize_url(u)
+        if not nu or not is_http_url(nu):
+            continue
+        if nu in seen:
+            continue
+        seen.add(nu)
+        cleaned.append(nu)
+    return cleaned
+
+def openai_search_urls(query: str, count: int) -> list[str]:
+    if not OPENAI_API_KEY:
+        return []
+    payload = {
+        "model": OPENAI_SEARCH_MODEL,
+        "tools": [{"type": "web_search"}],
+        "input": (
+            "Find official websites for music libraries or production music companies. "
+            f"Query: {query}\n"
+            f"Return up to {count} URLs."
+        ),
+    }
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    try:
+        r = requests.post(
+            f"{OPENAI_BASE_URL.rstrip('/')}/responses",
+            headers=headers,
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
+        )
+        if r.status_code != 200:
+            return []
+        data = r.json()
+        urls = extract_openai_urls(data)
+        return urls[:count]
+    except Exception:
+        return []
 
 def brave_search_urls(query: str, count: int) -> list[str]:
     if not BRAVE_API_KEY:
@@ -829,12 +914,16 @@ def discover_seed_urls() -> list[str]:
                 continue
             if provider == "serper" and not SERPER_API_KEY:
                 continue
+            if provider == "openai" and not OPENAI_API_KEY:
+                continue
             if not provider_quota_available(provider, used):
                 continue
             if provider == "brave":
                 urls.extend(brave_search_urls(q, DISCOVERY_PER_QUERY - len(urls)))
             elif provider == "serper":
                 urls.extend(serper_search_urls(q, DISCOVERY_PER_QUERY - len(urls)))
+            elif provider == "openai":
+                urls.extend(openai_search_urls(q, DISCOVERY_PER_QUERY - len(urls)))
             bump_provider_usage(provider, used)
 
         for u in urls:
@@ -912,6 +1001,7 @@ def main():
         lib_conf = library_confidence(title, headings, page_text, url)
 
         contact_type, email, contact_url = detect_contact(url, html)
+        company_name = derive_company_name(title, url)
 
         # Save lead if we found a real email or a usable contact page
         if contact_type in ("email", "form"):
@@ -947,6 +1037,7 @@ def main():
                 "email": email,
                 "contact_type": contact_type,
                 "contact_url": contact_url,
+                "company_name": company_name,
                 "role": role or "unknown",
                 "role_confidence": int(role_conf or 0),
                 "library_confidence": int(lib_conf or 0),
