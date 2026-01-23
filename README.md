@@ -21,6 +21,8 @@ copy .env.example .env
 - `samples/sample_run.log`
 
 ## Architecture (current)
+![Architecture Diagram](docs/architecture.svg)
+
 ```mermaid
 flowchart LR
   Q[queries.txt] --> D[Discovery: Brave/Serper]
