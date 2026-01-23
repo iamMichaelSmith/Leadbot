@@ -44,6 +44,7 @@ A Raspberry Pi was chosen because it is:
 - Draft message generator
 - Local web dashboard for approvals
 - Cron-based scheduling (added later)
+- Search discovery via Brave/Serper (optional)
 
 ### Cloud (AWS)
 
@@ -96,9 +97,6 @@ echo$HOME
 
 ```
 
-<img width="2080" height="775" alt="SMVP-create enviro 1" src="https://github.com/user-attachments/assets/802482c8-bfe0-4a27-bdc4-0afc59c1cf2e" />
-
-
 Create the project directories.
 
 ```bash
@@ -115,9 +113,7 @@ Expected result
 
 All three directories should be visible.
 
-📸 **Checkpoint Screenshot**
-
-This is a good first project screenshot that shows the environment setup and folder creation.
+Checkpoint Screenshot: update for library-only.
 
 ---
 
@@ -234,12 +230,11 @@ Expected output:
 ```
 Python environment OK
 
-📸 **Checkpoint Screenshot**
+Checkpoint Screenshot: update for library-only.
 ```
 
 This confirms your environment is production-ready.
 
-<img width="1140" height="407" alt="SMVP-installbeautifulsoup-2" src="https://github.com/user-attachments/assets/dca7db75-0c0b-4e39-8ef8-fd3dffa78d31" />
 
 
 ## Part 2: AWS Integration, IAM Least Privilege, DynamoDB, and First Crawl
@@ -427,7 +422,6 @@ aws dynamodb wait table-exists --region us-east-1 --table-name LeadbotPages
 ```
 
 
-<img width="1711" height="327" alt="SMVP-DBtables active" src="https://github.com/user-attachments/assets/75148001-c273-47d9-b513-d0a7bc86fa2e" />
 
 ### Confirm table status
 
@@ -506,7 +500,6 @@ https://www.audiosparx.com
 
 ```
 
-<img width="2159" height="687" alt="SMVP-SyncSources-3" src="https://github.com/user-attachments/assets/5789627c-605c-4b66-99fd-8f483e945e90" />
 
 
 Verify:
@@ -528,7 +521,6 @@ source .venv/bin/activate
 python run.py | tee ~/leadbot_logs/collector_manual.log
 
 ```
-<img width="1786" height="500" alt="SMVP-Scanworking-4" src="https://github.com/user-attachments/assets/144151aa-e0fe-4212-b0f6-99bd6951d23e" />
 
 
 
@@ -550,7 +542,6 @@ ps aux | grep run.py
 
 ```
 
-<img width="1800" height="143" alt="SMVP-Scan-complete" src="https://github.com/user-attachments/assets/c652ba80-d3c7-47b7-a6b1-8d7a134fe119" />
 
 
 Expected:
@@ -574,7 +565,6 @@ aws dynamodb scan \
 
 If items appear, the full ingestion pipeline is confirmed.
 
-<img width="1842" height="1758" alt="SMVP-DBreq" src="https://github.com/user-attachments/assets/4c9750cb-127d-4e6e-8e05-332f27b5c860" />
 
 
 ---
@@ -678,7 +668,6 @@ return"form",None, href
 returnNone,None,None
 
 ```
-<img width="1818" height="840" alt="SMVP-Updatescrapeimage" src="https://github.com/user-attachments/assets/8ff111bb-ab4c-4e8d-ba37-3d9feecfb1c7" />
 
 
 ### Pause Point
@@ -855,7 +844,7 @@ You should now see fewer “Fetch failed” messages and more lines like:
 
 ## Part 3: Library-Only Discovery Upgrade (current)
 
-After the initial supervisor/artist version, the project pivoted to music libraries only.
+After the initial broad discovery version, the project pivoted to music libraries only.
 The crawler now targets production music libraries and sync licensing catalogs, and blocks
 blogs, news, press, and unrelated platforms.
 
