@@ -13,11 +13,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-LEADS_TABLE = os.getenv("LEADS_TABLE", "LeadbotLeads")
-PAGES_TABLE = os.getenv("PAGES_TABLE", "LeadbotPages")
+LEADS_TABLE = os.getenv("LEADS_TABLE", "MusicLibraryLeads")
+PAGES_TABLE = os.getenv("PAGES_TABLE", "MusicLibraryPages")
 DYNAMODB_ENDPOINT_URL = os.getenv("DYNAMODB_ENDPOINT_URL")
 
-USER_AGENT = os.getenv("USER_AGENT", "StudioLeadbot/1.0")
+USER_AGENT = os.getenv("USER_AGENT", "MusicLibraryLeadFinder/1.0")
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "20"))
 SLEEP_BETWEEN_REQUESTS = float(os.getenv("SLEEP_BETWEEN_REQUESTS", "2.0"))
 MAX_PAGES_PER_RUN = int(os.getenv("MAX_PAGES_PER_RUN", "60"))
