@@ -21,18 +21,8 @@ copy .env.example .env
 - `samples/sample_run.log`
 
 ## Architecture (current)
-![Architecture Diagram](docs/architecture.png)
+<img width="2506" height="1111" alt="SMVP-main Diagram" src="https://github.com/user-attachments/assets/ae0e3f37-be7b-4d49-806a-0b63fda41a4f" />
 
-```mermaid
-flowchart LR
-  Q[queries.txt] --> D[Discovery: Brave/Serper]
-  S[seeds.txt] --> C[Crawler]
-  D --> C
-  C --> F[Filters + Scoring\n(library_confidence)]
-  F --> DB[(DynamoDB: MusicLibraryLeads)]
-  F --> P[(DynamoDB: MusicLibraryPages)]
-  F --> X[JSONL Export]
-```
 
 ## Testing (optional)
 ```bash
