@@ -157,7 +157,7 @@ Expected result
 
 All three directories should be visible.
 
-Checkpoint Screenshot: update for library-only.
+Image Placeholder: terminal showing the three project directories after creation.
 
 ---
 
@@ -274,7 +274,7 @@ Expected output:
 ```
 Python environment OK
 
-Checkpoint Screenshot: update for library-only.
+Image Placeholder: dependency install + successful test output.
 ```
 
 This confirms your environment is production-ready.
@@ -481,6 +481,7 @@ Expected:
 "ACTIVE"
 
 ```
+Image Placeholder: DynamoDB tables show ACTIVE status.
 
 ---
 
@@ -543,6 +544,7 @@ https://soundimage.org
 https://www.audiosparx.com
 
 ```
+Image Placeholder: library-only seeds list in terminal/editor.
 
 
 
@@ -565,6 +567,7 @@ source .venv/bin/activate
 python run.py | tee ~/leadbot_logs/collector_manual.log
 
 ```
+Image Placeholder: crawler output showing library-only leads.
 
 
 
@@ -593,7 +596,7 @@ Expected:
 - a live `python run.py` process
 - confirms crawler is active
 
-📸 Screenshot checkpoint captured here.
+Image Placeholder: running process in terminal (ps aux).
 
 ---
 
@@ -609,7 +612,7 @@ aws dynamodb scan \
 
 If items appear, the full ingestion pipeline is confirmed.
 
-
+Image Placeholder: DynamoDB scan showing library_confidence fields.
 
 ---
 
