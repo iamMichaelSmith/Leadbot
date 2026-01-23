@@ -1,12 +1,9 @@
-cd ~/leadbot
-cat > run.py <<'PY'
-# paste starts here
 import os
 import re
 import time
 import hashlib
 from datetime import datetime, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, parse_qsl, urlencode
 
 import boto3
 import requests
@@ -18,23 +15,69 @@ load_dotenv()
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 LEADS_TABLE = os.getenv("LEADS_TABLE", "LeadbotLeads")
 PAGES_TABLE = os.getenv("PAGES_TABLE", "LeadbotPages")
+DYNAMODB_ENDPOINT_URL = os.getenv("DYNAMODB_ENDPOINT_URL")
 
 USER_AGENT = os.getenv("USER_AGENT", "StudioLeadbot/1.0")
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "20"))
 SLEEP_BETWEEN_REQUESTS = float(os.getenv("SLEEP_BETWEEN_REQUESTS", "2.0"))
 MAX_PAGES_PER_RUN = int(os.getenv("MAX_PAGES_PER_RUN", "60"))
+MAX_LEADS_PER_RUN = int(os.getenv("MAX_LEADS_PER_RUN", "0"))
+MAX_PAGES_PER_DOMAIN = int(os.getenv("MAX_PAGES_PER_DOMAIN", "10"))
 MAX_LINKS_PER_PAGE = int(os.getenv("MAX_LINKS_PER_PAGE", "40"))
 ALLOW_EXTERNAL_DOMAINS = os.getenv("ALLOW_EXTERNAL_DOMAINS", "false").lower() in ("1", "true", "yes")
+EXPORT_LEADS_FILE = os.getenv("EXPORT_LEADS_FILE", "").strip()
+REQUIRE_SAME_DOMAIN_FORM = os.getenv("REQUIRE_SAME_DOMAIN_FORM", "1").strip() == "1"
+MIN_ROLE_CONFIDENCE = int(os.getenv("MIN_ROLE_CONFIDENCE", "0"))
+LIBRARIES_ONLY = os.getenv("LIBRARIES_ONLY", "0").strip() == "1"
+MIN_LIBRARY_CONFIDENCE = int(os.getenv("MIN_LIBRARY_CONFIDENCE", "60"))
 
-dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+VISITED_CACHE_ENABLED = os.getenv("VISITED_CACHE_ENABLED", "1").strip() == "1"
+VISITED_CACHE_TABLE = os.getenv("VISITED_CACHE_TABLE", PAGES_TABLE)
+VISITED_CACHE_TTL_HOURS = float(os.getenv("VISITED_CACHE_TTL_HOURS", "0"))
+
+DISCOVERY_ENABLED = os.getenv("DISCOVERY_ENABLED", "0").strip() == "1"
+DISCOVERY_PROVIDER = os.getenv("DISCOVERY_PROVIDER", "brave").strip().lower()
+DISCOVERY_PROVIDERS = os.getenv("DISCOVERY_PROVIDERS", "").strip().lower()
+DISCOVERY_QUERIES_FILE = os.getenv("DISCOVERY_QUERIES_FILE", "queries.txt")
+DISCOVERY_MAX_URLS = int(os.getenv("DISCOVERY_MAX_URLS", "50"))
+DISCOVERY_PER_QUERY = int(os.getenv("DISCOVERY_PER_QUERY", "10"))
+DISCOVERY_BATCH_SIZE = int(os.getenv("DISCOVERY_BATCH_SIZE", "50"))
+DISCOVERY_STATE_FILE = os.getenv("DISCOVERY_STATE_FILE", "discovery_state.json")
+DISCOVERY_DAILY_QUERY_LIMIT_BRAVE = int(os.getenv("DISCOVERY_DAILY_QUERY_LIMIT_BRAVE", "2000"))
+DISCOVERY_DAILY_QUERY_LIMIT_SERPER = int(os.getenv("DISCOVERY_DAILY_QUERY_LIMIT_SERPER", "2500"))
+
+BRAVE_API_KEY = os.getenv("BRAVE_API_KEY", "")
+SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+DISCO_PORTFOLIO_LINK = os.getenv("DISCO_PORTFOLIO_LINK", "").strip()
+
+dynamodb = boto3.resource(
+    "dynamodb",
+    region_name=AWS_REGION,
+    endpoint_url=DYNAMODB_ENDPOINT_URL or None,
+)
 leads_table = dynamodb.Table(LEADS_TABLE)
 pages_table = dynamodb.Table(PAGES_TABLE)
+visited_table = dynamodb.Table(VISITED_CACHE_TABLE)
 
 session = requests.Session()
 session.headers.update({"User-Agent": USER_AGENT})
 
+DOMAIN_LAST_REQUEST = {}
+DOMAIN_PAGES = {}
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+def normalize_netloc(netloc: str) -> str:
+    netloc = (netloc or "").lower()
+    if ":" in netloc:
+        netloc = netloc.split(":", 1)[0]
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+    return netloc
+
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return utc_now().isoformat()
 
 def sha_id(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
@@ -45,13 +88,112 @@ BLOCKED_EMAIL_DOMAINS = {
     "ingest.sentry.io",
     "cloudflare.com",
     "wix.com",
+    "wixpress.com",
+    "sentry.wixpress.com",
+    "sentry-next.wixpress.com",
     "squarespace.com",
     "wordpress.com",
     "privacy-protection.com",
     "domainsbyproxy.com",
     "whoisprivacyservice.com",
     "example.com",
+    "example.org",
+    "example.net",
+    "domain.com",
+    "reddit.com",
+    "error-tracking.reddit.com",
 }
+
+BLOCKED_DISCOVERY_DOMAINS = {
+    "linkedin.com",
+    "wikipedia.org",
+    "facebook.com",
+    "instagram.com",
+    "tiktok.com",
+    "twitter.com",
+    "x.com",
+    "reddit.com",
+    "pitchfork.com",
+    "newyorker.com",
+    "rollingstone.com",
+    "billboard.com",
+    "variety.com",
+    "hollywoodreporter.com",
+    "complex.com",
+    "tmz.com",
+    "genius.com",
+    "thefader.com",
+}
+
+BLOCKED_LIBRARY_DOMAINS = {
+    "unitedmasters.com",
+    "stage32.com",
+    "rostr.cc",
+    "reverbnation.com",
+    "hotnewhiphop.com",
+    "hypem.com",
+    "musicconnection.com",
+    "youtube.com",
+    "millennialmind.co",
+    "omarimc.com",
+}
+
+PLACEHOLDER_EMAIL_DOMAINS = {
+    "example.com",
+    "example.org",
+    "example.net",
+    "domain.com",
+}
+
+PLACEHOLDER_EMAIL_LOCALPARTS = {
+    "user",
+    "email",
+    "emails",
+    "filler",
+    "test",
+    "testing",
+}
+
+BLOCKED_EMAIL_DOMAIN_SUFFIXES = (
+    ".before",
+    ".having",
+    ".facilitates",
+    ".once",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".pdf",
+    ".zip",
+)
+
+BLOG_PATH_HINTS = (
+    "/blog",
+    "/news",
+    "/press",
+    "/article",
+    "/interview",
+    "/review",
+    "/podcast",
+    "/magazine",
+)
+
+LIBRARY_KEYWORDS = [
+    "music library",
+    "library music",
+    "production music",
+    "production library",
+    "sync licensing",
+    "music licensing",
+    "royalty-free",
+    "royalty free",
+    "catalog",
+    "music catalog",
+    "library catalog",
+    "license music",
+]
 
 BLOCKED_EMAIL_SUBSTRINGS = [
     ".ingest.",
@@ -69,11 +211,24 @@ def is_candidate_email(email: str) -> bool:
         if s in e:
             return False
     domain = e.split("@", 1)[1]
-    if domain in BLOCKED_EMAIL_DOMAINS:
+    local = e.split("@", 1)[0]
+    if host_in_set(domain, BLOCKED_EMAIL_DOMAINS):
+        return False
+    if local in PLACEHOLDER_EMAIL_LOCALPARTS:
+        return False
+    if domain in PLACEHOLDER_EMAIL_DOMAINS:
+        return False
+    if any(domain.endswith(sfx) for sfx in BLOCKED_EMAIL_DOMAIN_SUFFIXES):
         return False
     if domain.endswith(".sentry.io"):
         return False
     return True
+
+def normalize_email(email: str) -> str:
+    e = (email or "").strip().lower()
+    if e.startswith("mailto:"):
+        e = e[len("mailto:"):]
+    return e
 
 EMAIL_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
 
@@ -143,6 +298,7 @@ def safe_upsert_lead(item: dict):
     Uses update_item so first_seen does not get overwritten.
     lead_id must exist.
     """
+    item = {k: v for k, v in item.items() if v is not None}
     lead_id = item["lead_id"]
     expr_names = {}
     expr_values = {":now": now_iso()}
@@ -170,13 +326,65 @@ def safe_upsert_lead(item: dict):
     except Exception as e:
         print(f"DynamoDB leads_table upsert failed: {e}")
 
+def append_lead_export(item: dict):
+    if not EXPORT_LEADS_FILE:
+        return
+    try:
+        import json
+        with open(EXPORT_LEADS_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"Lead export failed: {e}")
+
 def normalize_url(u: str) -> str:
     try:
         p = urlparse(u)
-        u2 = p._replace(fragment="").geturl()
+        query = strip_tracking_params(p.query)
+        u2 = p._replace(fragment="", query=query).geturl()
         return u2.strip()
     except Exception:
         return (u or "").strip()
+
+def strip_tracking_params(query: str) -> str:
+    if not query:
+        return ""
+    tracking = {
+        "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+        "gclid", "fbclid", "igshid", "ref", "ref_src", "mc_cid", "mc_eid",
+        "mkt_tok", "_hsenc", "_hsmi", "ga_source", "ga_medium", "ga_campaign",
+    }
+    filtered = [(k, v) for k, v in parse_qsl(query, keep_blank_values=True) if k not in tracking]
+    return urlencode(filtered, doseq=True)
+
+def parse_iso(dt_str: str) -> datetime | None:
+    if not dt_str:
+        return None
+    try:
+        s = dt_str.replace("Z", "+00:00")
+        return datetime.fromisoformat(s)
+    except Exception:
+        return None
+
+def should_skip_cached(url: str) -> bool:
+    if not VISITED_CACHE_ENABLED:
+        return False
+    try:
+        resp = visited_table.get_item(
+            Key={"page_url": url},
+            ProjectionExpression="page_url,last_crawled",
+        )
+        item = resp.get("Item")
+        if not item:
+            return False
+        if VISITED_CACHE_TTL_HOURS <= 0:
+            return True
+        last = parse_iso(item.get("last_crawled", ""))
+        if not last:
+            return False
+        age = (utc_now() - last).total_seconds() / 3600.0
+        return age < VISITED_CACHE_TTL_HOURS
+    except Exception:
+        return False
 
 def is_http_url(u: str) -> bool:
     try:
@@ -195,21 +403,61 @@ def score_link(u: str) -> int:
         score -= 50
     return score
 
-def detect_role(text: str) -> tuple[str | None, int]:
-    t = (text or "").lower()
+def detect_role(title: str, headings: str, body: str, url: str) -> tuple[str | None, int]:
+    t = (title or "").lower()
+    h = (headings or "").lower()
+    b = (body or "").lower()
+    u = (url or "").lower()
+
+    def score_for_keywords(kws: list[str]) -> int:
+        score = 0
+        if any(k in t for k in kws):
+            score += 40
+        if any(k in h for k in kws):
+            score += 25
+        if any(k in u for k in kws):
+            score += 15
+        body_hits = sum(1 for k in kws if k in b)
+        score += min(body_hits, 3) * 8
+        if any(p in u for p in ("/team", "/staff", "/about", "/contact", "/roster", "/management")):
+            score += 5
+        if any(p in u for p in ("/blog", "/news", "/press", "/article")):
+            score -= 10
+        if score < 0:
+            score = 0
+        if score > 100:
+            score = 100
+        return score
+
     best = None
     best_score = 0
     for role, kws in ROLE_KEYWORDS.items():
-        score = sum(1 for k in kws if k in t)
+        score = score_for_keywords(kws)
         if score > best_score:
             best_score = score
             best = role
-    confidence = min(100, best_score * 25)
-    return best, confidence
+    if best_score == 0:
+        return None, 0
+    return best, best_score
 
 def fetch(url: str) -> str | None:
     url = normalize_url(url)
     try:
+        if should_skip_cached(url):
+            return None
+        netloc = normalize_netloc(urlparse(url).netloc)
+        if MAX_PAGES_PER_DOMAIN > 0 and netloc:
+            count = DOMAIN_PAGES.get(netloc, 0)
+            if count >= MAX_PAGES_PER_DOMAIN:
+                return None
+            DOMAIN_PAGES[netloc] = count + 1
+
+        last = DOMAIN_LAST_REQUEST.get(netloc, 0.0)
+        elapsed = time.time() - last
+        if elapsed < SLEEP_BETWEEN_REQUESTS:
+            time.sleep(SLEEP_BETWEEN_REQUESTS - elapsed)
+        DOMAIN_LAST_REQUEST[netloc] = time.time()
+
         r = session.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
         safe_put_pages({
             "page_url": url,
@@ -241,9 +489,11 @@ def extract_links(base_url: str, soup: BeautifulSoup, seed_netloc: str) -> list[
         u = normalize_url(urljoin(base_url, href))
         if not is_http_url(u):
             continue
+        if LIBRARIES_ONLY and is_blog_url(u):
+            continue
 
         try:
-            netloc = urlparse(u).netloc.lower()
+            netloc = normalize_netloc(urlparse(u).netloc)
         except Exception:
             netloc = ""
 
@@ -337,12 +587,18 @@ def detect_contact(page_url: str, html: str) -> tuple[str | None, str | None, st
 
 def build_draft(role: str | None) -> str:
     if role in ("music_supervisor", "publisher"):
+        disco_line = "Our DISCO portfolio link here: [DISCO PORTFOLIO LINK]\n\n"
+        if DISCO_PORTFOLIO_LINK:
+            disco_line = f"Our DISCO portfolio link here: {DISCO_PORTFOLIO_LINK}\n\n"
         return (
-            "Hi there\n\n"
-            "I came across your work and wanted to reach out from Blak Marigold Studio.\n\n"
-            "If you ever need clean, reliable mixing and mastering support or alternate mixes for deliverables, "
-            "we can turn things around quickly.\n\n"
-            "If helpful, reply with a reference and any delivery needs and I can follow up.\n\n"
+            "Hi\n\n"
+            "I came across your profile online and wanted to reach out from Blak Marigold Studio.\n\n"
+            "I know you are busy so I will keep it quick. We support sync teams with clean deliverables, fast turnarounds, and "
+            "alternate mixes when you need options for picture. We also handle mixing, mastering, and production in house when a track "
+            "needs finishing.\n\n"
+            + disco_line +
+            "If you can share what styles or briefs you are covering lately, I can send a short list of tracks that fit and the exact "
+            "deliverables available.\n\n"
             "Best\n"
             "Blak Marigold Studio\n"
             "BlakMarigold.com\n"
@@ -350,12 +606,15 @@ def build_draft(role: str | None) -> str:
 
     return (
         "Hi\n\n"
-        "If you are releasing music soon and want it to sound finished on Spotify and Apple, we can help with mixing and mastering.\n\n"
-        "Send a link to your latest track and what you want to improve.\n\n"
+        "I came across your music profile online and wanted to reach out from Blak Marigold Studio in Austin.\n\n"
+        "I know you are busy so I will keep it quick. We help artists get release ready records with mixing, mastering, and full "
+        "production when needed. We have 20 plus years of experience and over 1.4 billion streams across platforms, so we take "
+        "quality and turnaround seriously.\n\n"
+        "If you are working on a new release, reply with a link to your best track and what you want improved. I can tell you what "
+        "I would change and what it would take to get it where you want.\n\n"
         "Best\n"
         "Blak Marigold Studio\n"
-        "BlakMarigold.com\n\n"
-        "Our assistant reviews messages weekdays 10 AM to 2 PM and 6 PM to 8 PM Central.\n"
+        "BlakMarigold.com\n"
     )
 
 def load_seeds(path: str = "seeds.txt") -> list[str]:
@@ -371,8 +630,249 @@ def load_seeds(path: str = "seeds.txt") -> list[str]:
             out.append(s)
     return out
 
+def load_queries(path: str) -> list[str]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            out = []
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+                if s.startswith("#"):
+                    continue
+                out.append(s)
+            return out
+    except FileNotFoundError:
+        return []
+
+def load_discovery_state() -> dict:
+    try:
+        import json
+        with open(DISCOVERY_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+def save_discovery_state(state: dict):
+    try:
+        import json
+        with open(DISCOVERY_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except Exception:
+        pass
+
+def discovery_providers() -> list[str]:
+    if DISCOVERY_PROVIDERS:
+        return [p.strip() for p in DISCOVERY_PROVIDERS.split(",") if p.strip()]
+    return [DISCOVERY_PROVIDER or "brave"]
+
+def provider_quota_available(provider: str, used: dict) -> bool:
+    if provider == "brave":
+        return used.get("brave", 0) < DISCOVERY_DAILY_QUERY_LIMIT_BRAVE
+    if provider == "serper":
+        return used.get("serper", 0) < DISCOVERY_DAILY_QUERY_LIMIT_SERPER
+    return False
+
+def bump_provider_usage(provider: str, used: dict):
+    used[provider] = used.get(provider, 0) + 1
+
+def domain_ok(url: str) -> bool:
+    try:
+        host = normalize_netloc(urlparse(url).netloc)
+        if host.endswith(".edu"):
+            return False
+        if host_in_set(host, BLOCKED_DISCOVERY_DOMAINS):
+            return False
+        if host_in_set(host, BLOCKED_EMAIL_DOMAINS):
+            return False
+        if LIBRARIES_ONLY and host_in_set(host, BLOCKED_LIBRARY_DOMAINS):
+            return False
+        return True
+    except Exception:
+        return True
+
+def is_blocked_domain(host: str) -> bool:
+    h = normalize_netloc(host)
+    if not h:
+        return False
+    if h.endswith(".edu"):
+        return True
+    if host_in_set(h, BLOCKED_DISCOVERY_DOMAINS):
+        return True
+    if host_in_set(h, BLOCKED_EMAIL_DOMAINS):
+        return True
+    if LIBRARIES_ONLY and host_in_set(h, BLOCKED_LIBRARY_DOMAINS):
+        return True
+    return False
+
+def host_in_set(host: str, domain_set: set[str]) -> bool:
+    h = normalize_netloc(host)
+    if not h:
+        return False
+    for d in domain_set:
+        if h == d or h.endswith("." + d):
+            return True
+    return False
+
+def is_blog_url(url: str) -> bool:
+    try:
+        path = urlparse(url).path.lower()
+        return any(h in path for h in BLOG_PATH_HINTS)
+    except Exception:
+        return False
+
+def library_confidence(title: str, headings: str, body: str, url: str) -> int:
+    t = (title or "").lower()
+    h = (headings or "").lower()
+    b = (body or "").lower()
+    u = (url or "").lower()
+    score = 0
+    for kw in LIBRARY_KEYWORDS:
+        if kw in t:
+            score += 25
+        if kw in h:
+            score += 20
+        if kw in u:
+            score += 15
+        if kw in b:
+            score += 8
+    if any(p in u for p in ("/catalog", "/library", "/licensing", "/production-music")):
+        score += 10
+    if any(p in u for p in BLOG_PATH_HINTS):
+        score -= 30
+    if not any(k in t for k in LIBRARY_KEYWORDS) and not any(k in h for k in LIBRARY_KEYWORDS):
+        score = min(score, 40)
+    if score < 0:
+        score = 0
+    if score > 100:
+        score = 100
+    return score
+
+def brave_search_urls(query: str, count: int) -> list[str]:
+    if not BRAVE_API_KEY:
+        return []
+    endpoint = "https://api.search.brave.com/res/v1/web/search"
+    params = {"q": query, "count": str(min(count, 20))}
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": BRAVE_API_KEY,
+        "User-Agent": USER_AGENT,
+    }
+    r = requests.get(endpoint, params=params, headers=headers, timeout=REQUEST_TIMEOUT)
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    results = (((data or {}).get("web") or {}).get("results") or [])
+    urls = []
+    for item in results:
+        u = (item or {}).get("url")
+        if u:
+            urls.append(u)
+    return urls
+
+def serper_search_urls(query: str, count: int) -> list[str]:
+    if not SERPER_API_KEY:
+        return []
+    endpoint = "https://google.serper.dev/search"
+    headers = {
+        "X-API-KEY": SERPER_API_KEY,
+        "Content-Type": "application/json",
+    }
+    payload = {"q": query, "num": min(count, 20)}
+    r = requests.post(endpoint, headers=headers, json=payload, timeout=REQUEST_TIMEOUT)
+    if r.status_code != 200:
+        return []
+    data = r.json()
+    organic = (data or {}).get("organic") or []
+    urls = []
+    for item in organic:
+        u = (item or {}).get("link")
+        if u:
+            urls.append(u)
+    return urls
+
+def discover_seed_urls() -> list[str]:
+    if not DISCOVERY_ENABLED:
+        return []
+    queries = load_queries(DISCOVERY_QUERIES_FILE)
+    if not queries:
+        return []
+
+    state = load_discovery_state()
+    today = utc_now().date().isoformat()
+    if state.get("date") != today:
+        state = {"date": today, "query_index": state.get("query_index", 0), "used": {}}
+    used = state.get("used", {})
+
+    providers = discovery_providers()
+    if not providers:
+        return []
+
+    start = state.get("query_index", 0) % len(queries)
+    batch = min(DISCOVERY_BATCH_SIZE, len(queries))
+
+    found = []
+    seen = set()
+
+    for i in range(batch):
+        if len(found) >= DISCOVERY_MAX_URLS:
+            break
+        q = queries[(start + i) % len(queries)]
+
+        urls = []
+        offset = (start + i) % len(providers)
+        ordered = providers[offset:] + providers[:offset]
+        for provider in ordered:
+            if len(urls) >= DISCOVERY_PER_QUERY:
+                break
+            if provider == "brave" and not BRAVE_API_KEY:
+                continue
+            if provider == "serper" and not SERPER_API_KEY:
+                continue
+            if not provider_quota_available(provider, used):
+                continue
+            if provider == "brave":
+                urls.extend(brave_search_urls(q, DISCOVERY_PER_QUERY - len(urls)))
+            elif provider == "serper":
+                urls.extend(serper_search_urls(q, DISCOVERY_PER_QUERY - len(urls)))
+            bump_provider_usage(provider, used)
+
+        for u in urls:
+            nu = normalize_url(u)
+            if not nu:
+                continue
+            if nu in seen:
+                continue
+            if LIBRARIES_ONLY and is_blog_url(nu):
+                continue
+            if not domain_ok(nu):
+                continue
+            seen.add(nu)
+            found.append(nu)
+            if len(found) >= DISCOVERY_MAX_URLS:
+                break
+
+        time.sleep(SLEEP_BETWEEN_REQUESTS)
+
+    state["query_index"] = (start + batch) % len(queries)
+    state["used"] = used
+    save_discovery_state(state)
+
+    print(f"Discovery added {len(found)} seed urls")
+    return found
+
 def main():
     seeds = load_seeds("seeds.txt")
+    discovered = discover_seed_urls()
+    if discovered:
+        seed_set = {normalize_url(s) for s in seeds if s}
+        for u in discovered:
+            nu = normalize_url(u)
+            if not nu:
+                continue
+            if nu not in seed_set:
+                seeds.append(nu)
+                seed_set.add(nu)
     if not seeds:
         return
 
@@ -382,18 +882,21 @@ def main():
 
     visited = set()
     pages_visited = 0
+    leads_saved = 0
+    leads_seen = set()
 
     while queue and pages_visited < MAX_PAGES_PER_RUN:
+        if MAX_LEADS_PER_RUN > 0 and leads_saved >= MAX_LEADS_PER_RUN:
+            break
         url, seed_url = queue.pop(0)
         url = normalize_url(url)
         if url in visited:
             continue
         visited.add(url)
 
-        seed_netloc = urlparse(seed_url).netloc.lower()
+        seed_netloc = normalize_netloc(urlparse(seed_url).netloc)
 
         html = fetch(url)
-        time.sleep(SLEEP_BETWEEN_REQUESTS)
         if not html:
             continue
 
@@ -401,15 +904,43 @@ def main():
 
         soup = BeautifulSoup(html, "html.parser")
         title = (soup.title.get_text(" ", strip=True) if soup.title else "")
+        headings = " ".join(
+            h.get_text(" ", strip=True) for h in soup.select("h1, h2, h3")
+        )[:1000]
         page_text = soup.get_text(" ", strip=True)[:5000]
-        role, role_conf = detect_role(f"{title} {page_text}")
+        role, role_conf = detect_role(title, headings, page_text, url)
+        lib_conf = library_confidence(title, headings, page_text, url)
 
         contact_type, email, contact_url = detect_contact(url, html)
 
         # Save lead if we found a real email or a usable contact page
         if contact_type in ("email", "form"):
-            lead_key = email if email else (contact_url if contact_url else url)
+            if email:
+                lead_key = normalize_email(email)
+            elif contact_url:
+                lead_key = normalize_url(contact_url)
+            else:
+                lead_key = normalize_url(url)
             lead_id = sha_id(lead_key)
+            if lead_id in leads_seen:
+                continue
+            leads_seen.add(lead_id)
+
+            if email:
+                lead_host = normalize_netloc(email.split("@", 1)[1])
+            else:
+                lead_host = normalize_netloc(urlparse(contact_url or url).netloc)
+            if is_blocked_domain(lead_host):
+                continue
+            if contact_type == "form" and REQUIRE_SAME_DOMAIN_FORM:
+                contact_host = normalize_netloc(urlparse(contact_url or url).netloc)
+                source_host = normalize_netloc(urlparse(url).netloc)
+                if contact_host and source_host and contact_host != source_host:
+                    continue
+            if MIN_ROLE_CONFIDENCE > 0 and int(role_conf or 0) < MIN_ROLE_CONFIDENCE:
+                continue
+            if LIBRARIES_ONLY and lib_conf < MIN_LIBRARY_CONFIDENCE:
+                continue
 
             item = {
                 "lead_id": lead_id,
@@ -418,12 +949,15 @@ def main():
                 "contact_url": contact_url,
                 "role": role or "unknown",
                 "role_confidence": int(role_conf or 0),
+                "library_confidence": int(lib_conf or 0),
                 "source_url": url,
                 "status": "new",
                 "draft_message": build_draft(role),
             }
 
             safe_upsert_lead(item)
+            append_lead_export(item)
+            leads_saved += 1
 
             if email:
                 print(f"Lead saved: {role} email {email}")
@@ -436,10 +970,8 @@ def main():
             if nxt not in visited:
                 queue.append((nxt, seed_url))
 
-    print(f"Done. Visited {pages_visited} pages.")
+    print(f"Done. Visited {pages_visited} pages. Saved {leads_saved} leads.")
 
 if __name__ == "__main__":
     main()
-# paste ends here
-PY
 

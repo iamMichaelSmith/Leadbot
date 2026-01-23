@@ -24,13 +24,28 @@ def check_url(url: str) -> tuple[bool, str]:
         if not can_resolve(host):
             return False, "dns_fail"
 
-        r = requests.head(
+        try:
+            r = requests.head(
+                url,
+                allow_redirects=True,
+                timeout=TIMEOUT,
+                headers={"User-Agent": "StudioLeadbot/1.0"}
+            )
+            if r.status_code < 400:
+                return True, f"ok_{r.status_code}"
+            if r.status_code not in (403, 405):
+                return False, f"bad_status_{r.status_code}"
+        except requests.exceptions.RequestException:
+            pass
+
+        r = requests.get(
             url,
             allow_redirects=True,
             timeout=TIMEOUT,
-            headers={"User-Agent": "StudioLeadbot/1.0"}
+            headers={"User-Agent": "StudioLeadbot/1.0"},
+            stream=True,
         )
-
+        r.close()
         if r.status_code < 400:
             return True, f"ok_{r.status_code}"
         return False, f"bad_status_{r.status_code}"

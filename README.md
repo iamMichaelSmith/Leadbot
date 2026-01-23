@@ -864,3 +864,129 @@ You should now see fewer “Fetch failed” messages and more lines like:
 - `Lead saved: music_supervisor email ...`
 - `Lead saved: artist email ...`
 - `Done. Visited X pages.`
+
+---
+
+## Part 3: Library-Only Discovery Upgrade (current)
+
+After the initial supervisor/artist version, the project pivoted to music libraries only.
+The crawler now targets production music libraries and sync licensing catalogs, and blocks
+blogs, news, press, and unrelated platforms.
+
+### What changed
+
+- Library-only discovery mode with minimum library confidence
+- Search discovery via Brave/Serper with rotation and daily quotas
+- URL caching in DynamoDB to skip re-crawls
+- Optional JSONL lead export for local review
+- Library-focused seeds and queries
+
+---
+
+## Step 18: Update Python dependencies
+
+Dependencies are now managed via requirements.txt:
+
+```bash
+cd ~/leadbot
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+---
+
+## Step 19: Update .env for library-only mode
+
+Edit .env:
+
+```bash
+nano ~/leadbot/.env
+```
+
+Example (library-only):
+
+```
+LIBRARIES_ONLY=1
+MIN_LIBRARY_CONFIDENCE=60
+MIN_ROLE_CONFIDENCE=0
+
+DISCOVERY_ENABLED=1
+DISCOVERY_PROVIDERS=brave,serper
+DISCOVERY_QUERIES_FILE=queries.txt
+DISCOVERY_MAX_URLS=80
+DISCOVERY_PER_QUERY=10
+DISCOVERY_BATCH_SIZE=50
+DISCOVERY_STATE_FILE=discovery_state.json
+
+VISITED_CACHE_ENABLED=1
+VISITED_CACHE_TABLE=LeadbotPages
+VISITED_CACHE_TTL_HOURS=0
+
+EXPORT_LEADS_FILE=leads_export.jsonl
+```
+
+---
+
+## Step 20: Replace seeds.txt with library sources
+
+Create a library-only seed list:
+
+```bash
+nano ~/leadbot/seeds.txt
+```
+
+Example:
+
+```
+https://www.themusicase.com
+https://www.audionetwork.com
+https://www.dewolfemusic.com
+https://www.dramedybox.com
+https://www.blacktoastmusic.com
+https://www.atommusicaudio.com
+https://www.synctracks.com
+https://www.bulletproofbear.com
+https://www.moderngiantmusic.com
+https://www.apmmusic.com
+https://soundimage.org
+https://www.audiosparx.com
+```
+
+---
+
+## Step 21: Replace queries.txt with library queries
+
+```bash
+nano ~/leadbot/queries.txt
+```
+
+Example:
+
+```
+production music library licensing
+music library catalog contact
+royalty free music library sync licensing
+production music catalog library
+library music for film tv licensing
+music library submissions contact
+production music library roster
+instrumental music library licensing
+music library sync licensing company
+production music library contact
+```
+
+---
+
+## Step 22: Run the crawler (library-only)
+
+```bash
+cd ~/leadbot
+source .venv/bin/activate
+python run.py | tee ~/leadbot_logs/collector_manual.log
+```
+
+Check exports:
+
+```bash
+tail -n 20 ~/leadbot/leads_export.jsonl
+```

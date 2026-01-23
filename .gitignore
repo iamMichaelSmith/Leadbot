@@ -3,3 +3,7 @@
 __pycache__/
 .venv/
 venv/
+leads_export.jsonl
+discovery_state.json
+seeds_working.txt
+seeds_failed.txt
