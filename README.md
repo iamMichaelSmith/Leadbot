@@ -8,7 +8,7 @@ Built for a professional recording studio environment
 
 ### Primary Goals
 
-- Discover **music supervisors, publishers, artists, songwriters, and producers**
+- Discover **music libraries / production music catalogs** and licensing contacts
 - Use **public websites and directories only**
 - Respect platform rules and avoid aggressive automation
 - Centralize leads in a reviewable dashboard
@@ -187,7 +187,7 @@ Your terminal prompt should now show:
 ### Install Python Libraries
 
 ```bash
-pip install boto3 requests beautifulsoup4 python-dotenv tldextract
+pip install -r requirements.txt
 
 ```
 
@@ -212,13 +212,6 @@ pip install boto3 requests beautifulsoup4 python-dotenv tldextract
     Loads environment variables from `.env`
     
     Keeps secrets out of source code
-    
-- **tldextract**
-    
-    Normalizes domains
-    
-    Used to avoid duplicate leads from the same site
-    
 
 ---
 
@@ -231,7 +224,6 @@ python - <<'EOF'
 import boto3, requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-import tldextract
 print("Python environment OK")
 EOF
 
@@ -488,6 +480,7 @@ Notes:
 ## Step 11: Create a seed sources file
 
 The crawler only accesses **explicitly allowed public websites**.
+Seeds are always loaded; discovery adds extra URLs on top of this list.
 
 ### Create seeds file
 
@@ -497,26 +490,19 @@ nano ~/leadbot/seeds.txt
 ```
 
 ```
-# SYNC LICENSING SOURCES
-https://www.guildofmusicsupervisors.org
-https://www.songwriteruniverse.com/supervisors.htm
-https://www.songwriteruniverse.com/supervisors2.htm
-https://www.musicsupervisors.directory
-https://syncreport.com
-https://syncsummit.com
-https://syncsummit.com/speakers
-https://www.pmamusic.com
-https://www.aicp.com/members
-https://mpa.org
-
-# ARTIST DISCOVERY SOURCES
-https://bandcamp.com/discover
-https://bandcamp.com/artists
-https://daily.bandcamp.com
-https://www.marmosetmusic.com/artists
-https://www.musicbed.com/artists
-https://www.atriummusic.com/artists
-https://www.rostr.cc
+# MUSIC LIBRARY SOURCES
+https://www.themusicase.com
+https://www.audionetwork.com
+https://www.dewolfemusic.com
+https://www.dramedybox.com
+https://www.blacktoastmusic.com
+https://www.atommusicaudio.com
+https://www.synctracks.com
+https://www.bulletproofbear.com
+https://www.moderngiantmusic.com
+https://www.apmmusic.com
+https://soundimage.org
+https://www.audiosparx.com
 
 ```
 
@@ -622,20 +608,20 @@ At this point, Studio MVP has demonstrated:
 
 This checkpoint marks the transition into:
 
-- lead classification (artist vs sync)
+- library confidence scoring and quality gates
 - approval workflows
 - scheduling and time window controls
 - dashboard and multi-engineer access
 
 ## Advancing Lead Quality and Credibility
 
-After completing the first working version of the scraper, I reviewed the initial DynamoDB results and identified a key limitation. While the system successfully identified leads, **many were not wealthy enough for professional outreach**.
+After completing the first working version of the scraper, I reviewed the initial DynamoDB results and identified a key limitation. While the system successfully identified leads, **many were not actual music libraries**.
 
 The first pass primarily returned:
 
-- Generic organization contact forms
-- High-level platform pages
-- Pages without direct decision-maker contact details
+- Directory and listicle pages
+- Blog/press pages that are not licensing catalogs
+- Pages without direct library contact details
 
 Although technically correct, these leads required additional effort to convert into meaningful conversations.
 
@@ -861,8 +847,8 @@ python run.py | tee ~/leadbot_logs/collector_manual.log
 
 You should now see fewer “Fetch failed” messages and more lines like:
 
-- `Lead saved: music_supervisor email ...`
-- `Lead saved: artist email ...`
+- `Lead saved: publisher email ...`
+- `Lead saved: library form ...`
 - `Done. Visited X pages.`
 
 ---
