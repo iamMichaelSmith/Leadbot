@@ -340,6 +340,18 @@ def append_lead_export(item: dict):
     except Exception as e:
         print(f"Lead export failed: {e}")
 
+def is_lead_skipped(lead_id: str) -> bool:
+    try:
+        resp = leads_table.get_item(
+            Key={"lead_id": lead_id},
+            ProjectionExpression="lead_id,#s",
+            ExpressionAttributeNames={"#s": "status"},
+        )
+        item = resp.get("Item")
+        return bool(item and item.get("status") == "skipped")
+    except Exception:
+        return False
+
 def normalize_url(u: str) -> str:
     try:
         p = urlparse(u)
@@ -1012,6 +1024,8 @@ def main():
             else:
                 lead_key = normalize_url(url)
             lead_id = sha_id(lead_key)
+            if is_lead_skipped(lead_id):
+                continue
             if lead_id in leads_seen:
                 continue
             leads_seen.add(lead_id)

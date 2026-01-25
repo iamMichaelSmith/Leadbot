@@ -74,13 +74,8 @@ def now_iso() -> str:
 def require_user(request: Request) -> str | None:
     return request.session.get("user")
 
-def scan_leads(assignee: str | None, limit: int, rotate_days: int) -> list[dict[str, Any]]:
+def scan_leads(limit: int, rotate_days: int) -> list[dict[str, Any]]:
     filter_expr = Attr("status").not_exists() | Attr("status").eq("new")
-    if assignee:
-        if assignee == "__unassigned__":
-            filter_expr = filter_expr & (Attr("assignee").not_exists() | Attr("assignee").eq(""))
-        else:
-            filter_expr = filter_expr & Attr("assignee").eq(assignee)
 
     if rotate_days > 0:
         cutoff = (utc_now() - timedelta(days=rotate_days)).isoformat()
@@ -157,21 +152,18 @@ def logout(request: Request):
     return RedirectResponse("/login", status_code=302)
 
 @app.get("/")
-def dashboard(request: Request, assignee: str | None = None):
+def dashboard(request: Request):
     user = require_user(request)
     if not user:
         return RedirectResponse("/login", status_code=302)
 
-    items = scan_leads(assignee, DASHBOARD_PAGE_LIMIT, DASHBOARD_ROTATE_DAYS)
-    assignees = sorted(USERS.keys())
+    items = scan_leads(DASHBOARD_PAGE_LIMIT, DASHBOARD_ROTATE_DAYS)
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
             "user": user,
             "leads": items,
-            "assignees": assignees,
-            "assignee_filter": assignee or "",
             "rotate_days": DASHBOARD_ROTATE_DAYS,
             "page_limit": DASHBOARD_PAGE_LIMIT,
         },
@@ -185,20 +177,19 @@ def update_note(request: Request, lead_id: str, notes: str = Form("")):
     update_lead(lead_id, {"notes": notes.strip()}, user)
     return RedirectResponse("/", status_code=302)
 
-@app.post("/lead/{lead_id}/assign")
-def update_assignee(request: Request, lead_id: str, assignee: str = Form("")):
-    user = require_user(request)
-    if not user:
-        return RedirectResponse("/login", status_code=302)
-    update_lead(lead_id, {"assignee": assignee.strip()}, user)
-    return RedirectResponse("/", status_code=302)
-
 @app.post("/lead/{lead_id}/status")
-def update_status(request: Request, lead_id: str, status: str = Form(...)):
+def update_status(request: Request, lead_id: str, status: str = Form(...), notes: str = Form("")):
     user = require_user(request)
     if not user:
         return RedirectResponse("/login", status_code=302)
-    if status not in ("contacted", "bad"):
+    if status == "bad":
+        status = "skipped"
+    if status not in ("contacted", "skipped"):
         return RedirectResponse("/", status_code=302)
-    update_lead(lead_id, {"status": status}, user)
+    updates = {"status": status}
+    if status == "skipped":
+        updates["skipped_at"] = now_iso()
+    if notes is not None and notes.strip():
+        updates["notes"] = notes.strip()
+    update_lead(lead_id, updates, user)
     return RedirectResponse("/", status_code=302)

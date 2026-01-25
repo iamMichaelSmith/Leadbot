@@ -1,15 +1,18 @@
-document.addEventListener("click", (event) => {
-  const button = event.target.closest("button.copy");
-  if (!button) return;
-  const targetId = button.getAttribute("data-target");
-  if (!targetId) return;
-  const textarea = document.getElementById(targetId);
-  if (!textarea) return;
-  textarea.select();
-  textarea.setSelectionRange(0, textarea.value.length);
-  document.execCommand("copy");
-  button.textContent = "Copied!";
+document.addEventListener("submit", (event) => {
+  const form = event.target.closest("form.status-form");
+  if (!form) return;
+  const card = form.closest(".card");
+  if (!card) return;
+  const leadId = card.getAttribute("data-lead-id");
+  const notes = leadId
+    ? card.querySelector(`textarea[data-lead-id="${leadId}"]`)
+    : card.querySelector("textarea[name='notes']");
+  const hidden = form.querySelector("input[name='notes']");
+  if (hidden && notes) {
+    hidden.value = notes.value || "";
+  }
+  card.classList.add("is-saving");
   setTimeout(() => {
-    button.textContent = "Copy draft";
-  }, 1200);
+    card.remove();
+  }, 150);
 });
