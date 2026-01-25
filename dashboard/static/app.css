@@ -160,9 +160,20 @@ a:hover {
   margin: 14px 0 10px;
   display: grid;
   gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: 1fr;
   font-size: 14px;
   color: var(--muted);
+}
+
+.details div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.details a {
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .row {
