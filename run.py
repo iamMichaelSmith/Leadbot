@@ -1,6 +1,7 @@
 import os
 import re
 import time
+import json
 import hashlib
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, parse_qsl, urlencode
@@ -54,6 +55,14 @@ OPENAI_SEARCH_MODEL = os.getenv("OPENAI_SEARCH_MODEL", "gpt-4o-mini").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip()
 DISCO_PORTFOLIO_LINK = os.getenv("DISCO_PORTFOLIO_LINK", "").strip()
 
+QUEUE_ENABLED = os.getenv("QUEUE_ENABLED", "0").strip() == "1"
+QUEUE_MODE = os.getenv("QUEUE_MODE", "local").strip().lower()
+SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "").strip()
+SQS_MAX_MESSAGES = int(os.getenv("SQS_MAX_MESSAGES", "5"))
+SQS_WAIT_SECONDS = int(os.getenv("SQS_WAIT_SECONDS", "10"))
+SQS_VISIBILITY_TIMEOUT = int(os.getenv("SQS_VISIBILITY_TIMEOUT", "30"))
+SQS_MESSAGE_GROUP_ID = os.getenv("SQS_MESSAGE_GROUP_ID", "leadbot").strip()
+
 dynamodb = boto3.resource(
     "dynamodb",
     region_name=AWS_REGION,
@@ -62,6 +71,38 @@ dynamodb = boto3.resource(
 leads_table = dynamodb.Table(LEADS_TABLE)
 pages_table = dynamodb.Table(PAGES_TABLE)
 visited_table = dynamodb.Table(VISITED_CACHE_TABLE)
+
+def queue_enabled() -> bool:
+    return QUEUE_ENABLED and bool(SQS_QUEUE_URL)
+
+class SqsQueue:
+    def __init__(self, queue_url: str):
+        self.queue_url = queue_url
+        self.client = boto3.client("sqs", region_name=AWS_REGION)
+        self.is_fifo = queue_url.endswith(".fifo")
+
+    def send(self, url: str, seed_url: str):
+        body = json.dumps({"url": url, "seed_url": seed_url})
+        params = {"QueueUrl": self.queue_url, "MessageBody": body}
+        if self.is_fifo:
+            params["MessageGroupId"] = SQS_MESSAGE_GROUP_ID or "leadbot"
+            params["MessageDeduplicationId"] = sha_id(body)
+        self.client.send_message(**params)
+
+    def receive(self) -> list[dict]:
+        resp = self.client.receive_message(
+            QueueUrl=self.queue_url,
+            MaxNumberOfMessages=SQS_MAX_MESSAGES,
+            WaitTimeSeconds=SQS_WAIT_SECONDS,
+            VisibilityTimeout=SQS_VISIBILITY_TIMEOUT,
+        )
+        return resp.get("Messages", [])
+
+    def delete(self, receipt_handle: str):
+        self.client.delete_message(
+            QueueUrl=self.queue_url,
+            ReceiptHandle=receipt_handle,
+        )
 
 session = requests.Session()
 session.headers.update({"User-Agent": USER_AGENT})
@@ -525,6 +566,94 @@ def extract_links(base_url: str, soup: BeautifulSoup, seed_netloc: str) -> list[
     links.sort(key=score_link, reverse=True)
     return links[:MAX_LINKS_PER_PAGE]
 
+def crawl_one(
+    url: str,
+    seed_url: str,
+    visited: set[str],
+    leads_seen: set[str],
+    enqueue_fn,
+) -> tuple[int, int]:
+    url = normalize_url(url)
+    if not url:
+        return 0, 0
+    if url in visited:
+        return 0, 0
+    visited.add(url)
+
+    seed_netloc = normalize_netloc(urlparse(seed_url).netloc)
+
+    html = fetch(url)
+    if not html:
+        return 0, 0
+
+    soup = BeautifulSoup(html, "html.parser")
+    title = (soup.title.get_text(" ", strip=True) if soup.title else "")
+    headings = " ".join(
+        h.get_text(" ", strip=True) for h in soup.select("h1, h2, h3")
+    )[:1000]
+    page_text = soup.get_text(" ", strip=True)[:5000]
+    role, role_conf = detect_role(title, headings, page_text, url)
+    lib_conf = library_confidence(title, headings, page_text, url)
+
+    contact_type, email, contact_url = detect_contact(url, html)
+    company_name = derive_company_name(title, url)
+
+    leads_saved = 0
+    if contact_type in ("email", "form"):
+        if email:
+            lead_key = normalize_email(email)
+        elif contact_url:
+            lead_key = normalize_url(contact_url)
+        else:
+            lead_key = normalize_url(url)
+        lead_id = sha_id(lead_key)
+        if not is_lead_skipped(lead_id) and lead_id not in leads_seen:
+            allowed = True
+            if email:
+                lead_host = normalize_netloc(email.split("@", 1)[1])
+            else:
+                lead_host = normalize_netloc(urlparse(contact_url or url).netloc)
+            if is_blocked_domain(lead_host):
+                allowed = False
+            if contact_type == "form" and REQUIRE_SAME_DOMAIN_FORM:
+                contact_host = normalize_netloc(urlparse(contact_url or url).netloc)
+                source_host = normalize_netloc(urlparse(url).netloc)
+                if contact_host and source_host and contact_host != source_host:
+                    allowed = False
+            if MIN_ROLE_CONFIDENCE > 0 and int(role_conf or 0) < MIN_ROLE_CONFIDENCE:
+                allowed = False
+            if LIBRARIES_ONLY and lib_conf < MIN_LIBRARY_CONFIDENCE:
+                allowed = False
+            if allowed:
+                item = {
+                    "lead_id": lead_id,
+                    "email": email,
+                    "contact_type": contact_type,
+                    "contact_url": contact_url,
+                    "company_name": company_name,
+                    "role": role or "unknown",
+                    "role_confidence": int(role_conf or 0),
+                    "library_confidence": int(lib_conf or 0),
+                    "source_url": url,
+                    "status": "new",
+                    "draft_message": build_draft(role),
+                }
+                safe_upsert_lead(item)
+                append_lead_export(item)
+                leads_seen.add(lead_id)
+                leads_saved = 1
+                if email:
+                    print(f"Lead saved: {role} email {email}")
+                else:
+                    print(f"Lead saved: {role} form {contact_url}")
+
+    links = extract_links(url, soup, seed_netloc)
+    for nxt in links:
+        if nxt not in visited:
+            enqueue_fn(nxt, seed_url)
+
+    return leads_saved, 1
+
 def find_mailtos(soup: BeautifulSoup) -> list[str]:
     emails = set()
     for a in soup.select("a[href^='mailto:']"):
@@ -977,7 +1106,19 @@ def main():
     if not seeds:
         return
 
-    queue: list[tuple[str, str]] = []  # (url, seed_url)
+    if queue_enabled() and QUEUE_MODE == "producer":
+        sqs = SqsQueue(SQS_QUEUE_URL)
+        sent = 0
+        for s in seeds:
+            u = normalize_url(s)
+            if not u:
+                continue
+            sqs.send(u, s)
+            sent += 1
+        print(f"Queued {sent} seed urls to SQS.")
+        return
+
+    queue: list[tuple[str, str]] = []
     for s in seeds:
         queue.append((normalize_url(s), s))
 
@@ -986,94 +1127,56 @@ def main():
     leads_saved = 0
     leads_seen = set()
 
+    if queue_enabled() and QUEUE_MODE == "worker":
+        sqs = SqsQueue(SQS_QUEUE_URL)
+        idle_rounds = 0
+        while pages_visited < MAX_PAGES_PER_RUN:
+            msgs = sqs.receive()
+            if not msgs:
+                idle_rounds += 1
+                if idle_rounds >= 3:
+                    break
+                continue
+            idle_rounds = 0
+            for msg in msgs:
+                body = msg.get("Body") or ""
+                receipt = msg.get("ReceiptHandle")
+                try:
+                    payload = json.loads(body)
+                except Exception:
+                    if receipt:
+                        sqs.delete(receipt)
+                    continue
+                url = normalize_url(payload.get("url", ""))
+                seed_url = payload.get("seed_url") or url
+                if not url:
+                    if receipt:
+                        sqs.delete(receipt)
+                    continue
+
+                def enqueue_worker(nxt: str, seed: str):
+                    if should_skip_cached(nxt):
+                        return
+                    sqs.send(nxt, seed)
+
+                saved, visited_count = crawl_one(url, seed_url, visited, leads_seen, enqueue_worker)
+                pages_visited += visited_count
+                leads_saved += saved
+                if receipt:
+                    sqs.delete(receipt)
+        print(f"Done. Visited {pages_visited} pages. Saved {leads_saved} leads.")
+        return
+
     while queue and pages_visited < MAX_PAGES_PER_RUN:
         if MAX_LEADS_PER_RUN > 0 and leads_saved >= MAX_LEADS_PER_RUN:
             break
         url, seed_url = queue.pop(0)
-        url = normalize_url(url)
-        if url in visited:
-            continue
-        visited.add(url)
+        def enqueue_local(nxt: str, seed: str):
+            queue.append((nxt, seed))
 
-        seed_netloc = normalize_netloc(urlparse(seed_url).netloc)
-
-        html = fetch(url)
-        if not html:
-            continue
-
-        pages_visited += 1
-
-        soup = BeautifulSoup(html, "html.parser")
-        title = (soup.title.get_text(" ", strip=True) if soup.title else "")
-        headings = " ".join(
-            h.get_text(" ", strip=True) for h in soup.select("h1, h2, h3")
-        )[:1000]
-        page_text = soup.get_text(" ", strip=True)[:5000]
-        role, role_conf = detect_role(title, headings, page_text, url)
-        lib_conf = library_confidence(title, headings, page_text, url)
-
-        contact_type, email, contact_url = detect_contact(url, html)
-        company_name = derive_company_name(title, url)
-
-        # Save lead if we found a real email or a usable contact page
-        if contact_type in ("email", "form"):
-            if email:
-                lead_key = normalize_email(email)
-            elif contact_url:
-                lead_key = normalize_url(contact_url)
-            else:
-                lead_key = normalize_url(url)
-            lead_id = sha_id(lead_key)
-            if is_lead_skipped(lead_id):
-                continue
-            if lead_id in leads_seen:
-                continue
-            leads_seen.add(lead_id)
-
-            if email:
-                lead_host = normalize_netloc(email.split("@", 1)[1])
-            else:
-                lead_host = normalize_netloc(urlparse(contact_url or url).netloc)
-            if is_blocked_domain(lead_host):
-                continue
-            if contact_type == "form" and REQUIRE_SAME_DOMAIN_FORM:
-                contact_host = normalize_netloc(urlparse(contact_url or url).netloc)
-                source_host = normalize_netloc(urlparse(url).netloc)
-                if contact_host and source_host and contact_host != source_host:
-                    continue
-            if MIN_ROLE_CONFIDENCE > 0 and int(role_conf or 0) < MIN_ROLE_CONFIDENCE:
-                continue
-            if LIBRARIES_ONLY and lib_conf < MIN_LIBRARY_CONFIDENCE:
-                continue
-
-            item = {
-                "lead_id": lead_id,
-                "email": email,
-                "contact_type": contact_type,
-                "contact_url": contact_url,
-                "company_name": company_name,
-                "role": role or "unknown",
-                "role_confidence": int(role_conf or 0),
-                "library_confidence": int(lib_conf or 0),
-                "source_url": url,
-                "status": "new",
-                "draft_message": build_draft(role),
-            }
-
-            safe_upsert_lead(item)
-            append_lead_export(item)
-            leads_saved += 1
-
-            if email:
-                print(f"Lead saved: {role} email {email}")
-            else:
-                print(f"Lead saved: {role} form {contact_url}")
-
-        # Follow links
-        links = extract_links(url, soup, seed_netloc)
-        for nxt in links:
-            if nxt not in visited:
-                queue.append((nxt, seed_url))
+        saved, visited_count = crawl_one(url, seed_url, visited, leads_seen, enqueue_local)
+        pages_visited += visited_count
+        leads_saved += saved
 
     print(f"Done. Visited {pages_visited} pages. Saved {leads_saved} leads.")
 

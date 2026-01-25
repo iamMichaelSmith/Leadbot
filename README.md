@@ -5,6 +5,7 @@ Music Library Lead Finder is a local-first crawler and review dashboard for disc
 ## Requirements
 - Python 3.10+
 - AWS account (DynamoDB) or DynamoDB Local
+- AWS account (SQS optional, for queue-based scaling)
 
 ## Quickstart (Windows PowerShell)
 ```powershell
@@ -45,6 +46,17 @@ Optional (local DynamoDB):
 DYNAMODB_ENDPOINT_URL=http://localhost:8000
 ```
 
+Optional (SQS queue for scaling):
+```
+QUEUE_ENABLED=1
+QUEUE_MODE=producer   # producer | worker | local
+SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/your-queue
+SQS_MAX_MESSAGES=5
+SQS_WAIT_SECONDS=10
+SQS_VISIBILITY_TIMEOUT=30
+SQS_MESSAGE_GROUP_ID=leadbot
+```
+
 ## Dashboard
 Windows:
 ```powershell
@@ -58,6 +70,11 @@ Linux / Raspberry Pi:
 ```
 
 Open `http://localhost:8001` (or the port in `DASHBOARD_PORT`).
+
+## Services Used (and Why)
+- **DynamoDB**: durable lead storage, deduplication, and dashboard reads.
+- **SQS (optional)**: decouples crawling work so you can run multiple workers in parallel, buffer spikes, and scale safely.
+- **Brave/Serper (optional)**: discovery providers for finding new seed URLs.
 
 ## AWS Setup (DynamoDB)
 Create the two tables:
@@ -82,6 +99,30 @@ aws dynamodb create-table \
 ```
 
 Make sure your AWS credentials are set (either `aws configure` or environment variables).
+
+## AWS Setup (SQS, optional)
+Use SQS if you want queue-based scaling (producer → workers).
+
+Create a queue (standard is fine) and copy the Queue URL into `SQS_QUEUE_URL`.
+
+### Modes
+- `QUEUE_MODE=producer`: enqueue seed URLs into SQS.
+- `QUEUE_MODE=worker`: pull URLs from SQS, crawl, and write leads to DynamoDB.
+- `QUEUE_MODE=local` or `QUEUE_ENABLED=0`: original single-process crawl.
+
+### Example workflow
+1) Producer:
+```bash
+QUEUE_ENABLED=1
+QUEUE_MODE=producer
+python run.py
+```
+2) Worker (run one or many workers):
+```bash
+QUEUE_ENABLED=1
+QUEUE_MODE=worker
+python run.py
+```
 
 ## Seed Validation (optional)
 Validate and clean seed URLs:
