@@ -78,15 +78,11 @@
               <button class="thumb up" type="submit" name="status" value="contacted">Reached out</button>
               <button class="thumb down" type="submit" name="status" value="skipped">Skip</button>
             </div>
-            <input type="hidden" name="notes" value="" />
-          </form>
-        </div>
 
-        <form class="field" method="post" action="/lead/{{ lead.lead_id }}/note">
           <label>Notes</label>
           <textarea name="notes" rows="2" data-lead-id="{{ lead.lead_id }}">{{ lead.notes or "" }}</textarea>
-          <button type="submit">Save notes</button>
-        </form>
+          </form>
+        </div>
 
       </article>
       {% endfor %}

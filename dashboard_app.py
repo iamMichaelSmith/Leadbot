@@ -14,11 +14,25 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
-load_dotenv()
+BASE_DIR = Path(__file__).resolve().parent
+# Force loading the project .env so we don't pick up unrelated parent env files.
+load_dotenv(dotenv_path=BASE_DIR / ".env", override=True)
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 LEADS_TABLE = os.getenv("LEADS_TABLE", "MusicLibraryLeads")
 DYNAMODB_ENDPOINT_URL = os.getenv("DYNAMODB_ENDPOINT_URL")
+DISABLE_PROXY = os.getenv("DASHBOARD_DISABLE_PROXY", "1").strip()
+
+if DISABLE_PROXY != "0":
+    # Avoid Windows/system proxy settings breaking AWS calls.
+    os.environ["HTTP_PROXY"] = ""
+    os.environ["HTTPS_PROXY"] = ""
+    os.environ["ALL_PROXY"] = ""
+    os.environ["NO_PROXY"] = "*"
+    os.environ["http_proxy"] = ""
+    os.environ["https_proxy"] = ""
+    os.environ["all_proxy"] = ""
+    os.environ["no_proxy"] = "*"
 
 DASHBOARD_USERS = os.getenv("DASHBOARD_USERS", "").strip()
 DASHBOARD_SESSION_SECRET = os.getenv("DASHBOARD_SESSION_SECRET", "").strip()
@@ -39,7 +53,7 @@ def parse_users(raw: str) -> dict[str, str]:
         if ":" not in part:
             continue
         user, pw = part.split(":", 1)
-        user = user.strip()
+        user = user.strip().lower()
         pw = pw.strip()
         if user and pw:
             users[user] = pw
@@ -49,7 +63,6 @@ USERS = parse_users(DASHBOARD_USERS)
 if not USERS:
     raise RuntimeError("DASHBOARD_USERS is empty. Set users as 'name:pass,name2:pass2'.")
 
-BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "dashboard" / "templates"
 STATIC_DIR = BASE_DIR / "dashboard" / "static"
 
@@ -176,12 +189,13 @@ def login_page(request: Request, error: str | None = None):
 
 @app.post("/login")
 def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    if USERS.get(username) != password:
+    user_key = (username or "").strip().lower()
+    if USERS.get(user_key) != password:
         return templates.TemplateResponse(
             "login.html",
             {"request": request, "error": "Invalid username or password"},
         )
-    request.session["user"] = username
+    request.session["user"] = user_key
     return RedirectResponse("/", status_code=302)
 
 @app.get("/logout")

@@ -58,6 +58,8 @@ SQS_MESSAGE_GROUP_ID=leadbot
 ```
 
 ## Dashboard
+The dashboard uses its own login (set in `DASHBOARD_USERS`) and is typically accessed locally.
+
 Windows:
 ```powershell
 .\.venv\Scripts\pip install -r requirements.txt
@@ -70,6 +72,20 @@ Linux / Raspberry Pi:
 ```
 
 Open `http://localhost:8001` (or the port in `DASHBOARD_PORT`).
+
+### Remote access (recommended: Tailscale)
+For private, simple access by a few people, use Tailscale instead of exposing the dashboard to the public internet.
+
+1) Install Tailscale on the host and each user's device.
+2) Sign in to the same tailnet and invite the other users.
+3) Share the Tailscale IP of the host (see `tailscale ip -4`), and use:
+```
+http://<tailscale-ip>:<DASHBOARD_PORT>
+```
+
+Notes:
+- Tailscale controls network access; the dashboard still uses `DASHBOARD_USERS` for login.
+- No public ports or reverse proxy needed.
 
 ## Services Used (and Why)
 - **DynamoDB**: durable lead storage, deduplication, and dashboard reads.
