@@ -62,6 +62,9 @@ SQS_MAX_MESSAGES = int(os.getenv("SQS_MAX_MESSAGES", "5"))
 SQS_WAIT_SECONDS = int(os.getenv("SQS_WAIT_SECONDS", "10"))
 SQS_VISIBILITY_TIMEOUT = int(os.getenv("SQS_VISIBILITY_TIMEOUT", "30"))
 SQS_MESSAGE_GROUP_ID = os.getenv("SQS_MESSAGE_GROUP_ID", "leadbot").strip()
+SKIP_CONTACTED_DOMAINS = os.getenv("SKIP_CONTACTED_DOMAINS", "1").strip() == "1"
+DEDUPE_BY_DOMAIN = os.getenv("DEDUPE_BY_DOMAIN", "0").strip() == "1"
+DEDUPE_FOR_FORMS = os.getenv("DEDUPE_FOR_FORMS", "1").strip() == "1"
 
 dynamodb = boto3.resource(
     "dynamodb",
@@ -252,6 +255,8 @@ def is_candidate_email(email: str) -> bool:
     e = (email or "").strip().lower()
     if "@" not in e:
         return False
+    if any(ext in e for ext in (".wav", ".aif", ".mp3")):
+        return False
     for s in BLOCKED_EMAIL_SUBSTRINGS:
         if s in e:
             return False
@@ -381,7 +386,7 @@ def append_lead_export(item: dict):
     except Exception as e:
         print(f"Lead export failed: {e}")
 
-def is_lead_skipped(lead_id: str) -> bool:
+def is_lead_skipped(lead_id: str, lead_domain: str | None = None) -> bool:
     try:
         resp = leads_table.get_item(
             Key={"lead_id": lead_id},
@@ -389,9 +394,23 @@ def is_lead_skipped(lead_id: str) -> bool:
             ExpressionAttributeNames={"#s": "status"},
         )
         item = resp.get("Item")
-        return bool(item and item.get("status") == "skipped")
+        if item and item.get("status") in ("skipped", "contacted"):
+            return True
     except Exception:
         return False
+    if SKIP_CONTACTED_DOMAINS and lead_domain:
+        try:
+            domain_id = sha_id(f"domain:{lead_domain}")
+            resp = leads_table.get_item(
+                Key={"lead_id": domain_id},
+                ProjectionExpression="lead_id,#s",
+                ExpressionAttributeNames={"#s": "status"},
+            )
+            item = resp.get("Item")
+            return bool(item and item.get("status") == "contacted")
+        except Exception:
+            return False
+    return False
 
 def normalize_url(u: str) -> str:
     try:
@@ -606,13 +625,20 @@ def crawl_one(
             lead_key = normalize_url(contact_url)
         else:
             lead_key = normalize_url(url)
-        lead_id = sha_id(lead_key)
-        if not is_lead_skipped(lead_id) and lead_id not in leads_seen:
+        if email:
+            lead_domain = normalize_netloc(email.split("@", 1)[1])
+        else:
+            lead_domain = normalize_netloc(urlparse(contact_url or url).netloc)
+        if (DEDUPE_FOR_FORMS and contact_type == "form" and lead_domain) or (DEDUPE_BY_DOMAIN and lead_domain):
+            lead_id = sha_id(f"lead_domain:{lead_domain}")
+        else:
+            lead_id = sha_id(lead_key)
+        if not is_lead_skipped(lead_id, lead_domain) and lead_id not in leads_seen:
             allowed = True
             if email:
-                lead_host = normalize_netloc(email.split("@", 1)[1])
+                lead_host = lead_domain
             else:
-                lead_host = normalize_netloc(urlparse(contact_url or url).netloc)
+                lead_host = lead_domain
             if is_blocked_domain(lead_host):
                 allowed = False
             if contact_type == "form" and REQUIRE_SAME_DOMAIN_FORM:
@@ -630,6 +656,7 @@ def crawl_one(
                     "email": email,
                     "contact_type": contact_type,
                     "contact_url": contact_url,
+                    "lead_domain": lead_domain,
                     "company_name": company_name,
                     "role": role or "unknown",
                     "role_confidence": int(role_conf or 0),
@@ -1127,10 +1154,11 @@ def main():
     leads_saved = 0
     leads_seen = set()
 
+    max_pages_per_run = MAX_PAGES_PER_RUN if MAX_PAGES_PER_RUN > 0 else float("inf")
     if queue_enabled() and QUEUE_MODE == "worker":
         sqs = SqsQueue(SQS_QUEUE_URL)
         idle_rounds = 0
-        while pages_visited < MAX_PAGES_PER_RUN:
+        while pages_visited < max_pages_per_run:
             msgs = sqs.receive()
             if not msgs:
                 idle_rounds += 1
@@ -1167,7 +1195,7 @@ def main():
         print(f"Done. Visited {pages_visited} pages. Saved {leads_saved} leads.")
         return
 
-    while queue and pages_visited < MAX_PAGES_PER_RUN:
+    while queue and pages_visited < max_pages_per_run:
         if MAX_LEADS_PER_RUN > 0 and leads_saved >= MAX_LEADS_PER_RUN:
             break
         url, seed_url = queue.pop(0)

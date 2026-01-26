@@ -1,4 +1,5 @@
 import os
+import hashlib
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
 from pathlib import Path
@@ -71,6 +72,15 @@ def utc_now() -> datetime:
 def now_iso() -> str:
     return utc_now().isoformat()
 
+def sha_id(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+def normalize_netloc(netloc: str) -> str:
+    host = (netloc or "").strip().lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
 def require_user(request: Request) -> str | None:
     return request.session.get("user")
 
@@ -127,6 +137,34 @@ def update_lead(lead_id: str, updates: dict[str, Any], user: str):
         UpdateExpression="SET " + ", ".join(parts),
         ExpressionAttributeNames=expr_names,
         ExpressionAttributeValues=expr_values,
+    )
+
+def upsert_domain_suppression(domain: str, source_lead_id: str, user: str):
+    domain = normalize_netloc(domain)
+    if not domain:
+        return
+    domain_id = sha_id(f"domain:{domain}")
+    now = now_iso()
+    leads_table.update_item(
+        Key={"lead_id": domain_id},
+        UpdateExpression=(
+            "SET #type = :type, #status = :status, lead_domain = :domain, "
+            "first_seen = if_not_exists(first_seen, :now), last_seen = :now, "
+            "contacted_at = :now, touched_at = :now, touched_by = :user, "
+            "source_lead_id = :source"
+        ),
+        ExpressionAttributeNames={
+            "#type": "item_type",
+            "#status": "status",
+        },
+        ExpressionAttributeValues={
+            ":type": "domain_suppression",
+            ":status": "contacted",
+            ":domain": domain,
+            ":now": now,
+            ":user": user,
+            ":source": source_lead_id,
+        },
     )
 
 @app.get("/login")
@@ -186,10 +224,26 @@ def update_status(request: Request, lead_id: str, status: str = Form(...), notes
         status = "skipped"
     if status not in ("contacted", "skipped"):
         return RedirectResponse("/", status_code=302)
+    lead_domain = ""
+    if status == "contacted":
+        try:
+            resp = leads_table.get_item(Key={"lead_id": lead_id})
+            item = resp.get("Item", {})
+            lead_domain = (
+                item.get("lead_domain")
+                or normalize_netloc(urlparse(item.get("contact_url") or "").netloc)
+                or normalize_netloc(urlparse(item.get("source_url") or "").netloc)
+            )
+            if not lead_domain and item.get("email"):
+                lead_domain = normalize_netloc(item["email"].split("@", 1)[1])
+        except Exception:
+            lead_domain = ""
     updates = {"status": status}
     if status == "skipped":
         updates["skipped_at"] = now_iso()
     if notes is not None and notes.strip():
         updates["notes"] = notes.strip()
     update_lead(lead_id, updates, user)
+    if status == "contacted" and lead_domain:
+        upsert_domain_suppression(lead_domain, lead_id, user)
     return RedirectResponse("/", status_code=302)
